@@ -255,7 +255,7 @@ static void * FileProgressObserverContext = &FileProgressObserverContext;
                                                      userInfo:nil];
     progress.kind = NSProgressKindFile;
     [progress setUserInfoObject:NSProgressFileOperationKindKey
-                         forKey:NSProgressFileOperationKindDownloading];
+                         forKey:NSProgressFileOperationKindCopying];
     [progress setUserInfoObject:self.fullPath forKey:@"fullPath"];
     progress.cancellable = NO;
     progress.pausable = NO;
