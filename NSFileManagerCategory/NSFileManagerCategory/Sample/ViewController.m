@@ -29,9 +29,9 @@ static void * FileProgressObserverContext = &FileProgressObserverContext;
 @property (nonatomic, strong) NSProgress *fileProgress;
 @property (nonatomic, strong) NSOperationQueue *loadFileQueue;
 @property (nonatomic, strong) NSFileManager *fileManager;
-@property (nonatomic, copy) NSString *rootPath;
-@property (nonatomic, strong) NSMutableArray *copyfiles;
+@property (nonatomic, strong) NSMutableArray<FileAttributeItem *> *copyfiles;
 @property (nonatomic, strong) UIProgressView *progressBar;
+@property (nonatomic, strong) NSArray<FileAttributeItem *> *sourceFiles;
 
 @end
 
@@ -41,8 +41,8 @@ static void * FileProgressObserverContext = &FileProgressObserverContext;
     [super viewDidLoad];
     // Do any additional setup after loading the view, typically from a nib.
     
+    _loadFileQueue = [NSOperationQueue new];
     _copyfiles = [NSMutableArray array];
-    _rootPath = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     _fileProgress = [NSProgress progressWithTotalUnitCount:0];
     [_fileProgress addObserver:self
                     forKeyPath:NSStringFromSelector(@selector(fractionCompleted))
@@ -63,7 +63,49 @@ static void * FileProgressObserverContext = &FileProgressObserverContext;
 
 }
 
+
+- (void)loadFile:(NSString *)path completion:(void (^)(NSArray<FileAttributeItem *> *files))completion {
+    [_loadFileQueue addOperationWithBlock:^{
+        BOOL isExist, isDirectory;
+        isExist = [_fileManager fileExistsAtPath:path isDirectory:&isDirectory];
+        if (!isExist || isDirectory) {
+            if (completion) {
+                completion(nil);
+            }
+            return;
+        }
+        NSMutableArray *array = [NSMutableArray array];
+        NSError *error = nil;
+        NSArray *tempFiles = [_fileManager contentsOfDirectoryAtPath:path error:&error];
+        if (error) {
+            NSLog(@"Error: %@", error);
+        }
+        NSArray *files = [self sortedFiles:tempFiles rootPath:path];
+        [files enumerateObjectsUsingBlock:^(NSString * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
+            FileAttributeItem *model = [FileAttributeItem new];
+            NSString *fullPath = [path stringByAppendingPathComponent:obj];
+            model.fullPath = fullPath;
+            NSError *error = nil;
+            NSArray *subFiles = [_fileManager contentsOfDirectoryAtPath:fullPath error:&error];
+            if (!error) {
+                model.subFileCount = subFiles.count;
+            }
+            
+            [array addObject:model];
+        }];
+        if (completion) {
+            completion(array);
+        }
+    }];
+}
+
+
 - (IBAction)copyFile:(id)sender {
+    
+    [self loadFile:NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject completion:^(NSArray<FileAttributeItem *> *files) {
+        
+        [self copyFile:files toRootPath:NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject];
+    }];
     
     
 }
@@ -86,14 +128,13 @@ static void * FileProgressObserverContext = &FileProgressObserverContext;
     }
 }
 
-- (void)copyFileFromFileItems:(NSArray<FileAttributeItem *> *)fileItems {
+- (void)copyFile:(NSArray<FileAttributeItem *> *)fileItems toRootPath:(NSString *)dstRootPath {
     
     [_copyfiles addObjectsFromArray:fileItems];
     
     [_loadFileQueue addOperationWithBlock:^{
         [self resetProgress];
         
-        __weak typeof(self) weakSelf = self;
         [fileItems enumerateObjectsUsingBlock:^(FileAttributeItem *  _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
             self.fileProgress.totalUnitCount++;
             [self.fileProgress becomeCurrentWithPendingUnitCount:1];
@@ -105,7 +146,7 @@ static void * FileProgressObserverContext = &FileProgressObserverContext;
             obj.totalFileSize = [[fileAttrs objectForKey:NSFileSize] intValue];
             [self.fileProgress resignCurrent];
             
-            NSString *desPath = [weakSelf.rootPath stringByAppendingPathComponent:[obj.fullPath lastPathComponent]];
+            NSString *desPath = [dstRootPath stringByAppendingPathComponent:[obj.fullPath lastPathComponent]];
             
             if ([desPath isEqualToString:obj.fullPath]) {
                 NSLog(@"路径相同");
@@ -170,6 +211,26 @@ static void * FileProgressObserverContext = &FileProgressObserverContext;
         _progressBar.progress = 0.0;
     }
     return _progressBar;
+}
+
+////////////////////////////////////////////////////////////////////////
+#pragma mark - Sorted files
+////////////////////////////////////////////////////////////////////////
+- (NSArray *)sortedFiles:(NSArray *)files rootPath:(NSString *)rootPath {
+    return [files sortedArrayWithOptions:NSSortConcurrent usingComparator:^NSComparisonResult(NSString* file1, NSString* file2) {
+        NSString *newPath1 = [rootPath stringByAppendingPathComponent:file1];
+        NSString *newPath2 = [rootPath stringByAppendingPathComponent:file2];
+        
+        BOOL isDirectory1, isDirectory2;
+        [[NSFileManager defaultManager ] fileExistsAtPath:newPath1 isDirectory:&isDirectory1];
+        [[NSFileManager defaultManager ] fileExistsAtPath:newPath2 isDirectory:&isDirectory2];
+        
+        if (isDirectory1 && !isDirectory2) {
+            return NSOrderedAscending;
+        }
+        
+        return  NSOrderedDescending;
+    }];
 }
 
 - (void)dealloc {
